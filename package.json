@@ -1,0 +1,27 @@
+{
+  "name": "izdeme-v2",
+  "version": "2.0.0-alpha",
+  "private": true,
+  "description": "IzdeMe v2 — Next.js + Supabase (pgvector) + Inngest rebuild. Foundation: deterministic Fit Score + heuristic parser (ported from v1) with Zod schemas and DB migrations.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "^15.1.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/react": "^19.0.6",
+    "@types/react-dom": "^19.0.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}
