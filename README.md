@@ -13,8 +13,8 @@ deterministic, explainable **Fit Score (Hard 40 / Experience 30 / Soft 30)** as 
 |---|---|---|
 | **0 Scaffolding** | Next.js/TS app, Zod schemas, Supabase migrations | ✅ done (account-free parts) |
 | **3 Deterministic core** | Verbatim TS port of Fit Score + heuristic parser + **unit tests** | ✅ done |
+| **2 Embeddings + retrieval** | Embedding abstraction (+ offline fallback), cosine top-K retrieval, `retrieval_query` builder, curated corpus + **unit tests** | 🟡 pipeline done; needs Gemini key for true semantic recall + pgvector for the DB path |
 | 1 Persistence + Auth | Supabase Auth, persist profiles | ⏳ needs Supabase project |
-| 2 Embeddings + retrieval | `gemini-embedding-001` (1536d), pgvector HNSW, asymmetric task types | ⏳ needs Gemini key |
 | 4 LLM orchestration | Vercel AI SDK agents (parser/planner/ranker/tailor), `generateObject` | ⏳ needs LLM key |
 | 5 Background jobs | Inngest functions + Supabase Realtime status | ⏳ needs Inngest |
 | 6 Product surface | saved searches, application tracker, résumé versioning | ⏳ |
@@ -32,6 +32,11 @@ lib/
   parser/
     heuristic.ts          # parseResume, computeYears, extractIdentity  (ported verbatim)
     heuristic.test.ts     # alias resolution, year merging/exclusion, name/title
+  embeddings.ts           # embed() — Gemini (asymmetric task types) OR offline hash fallback; cosine
+  retrieval.ts            # retrieveTopK — in-memory analog of the pgvector cosine query
+  embeddings.test.ts / retrieval.test.ts   # determinism, ordering, semantic recall
+  profile/retrievalQuery.ts   # profile → "ideal job description" (asymmetric-text fix, §4)
+  ingest/vacancies.ts     # curated corpus + retrieveCandidates() orchestrator
 supabase/migrations/
   0001_init.sql           # full schema + RLS (incl. the vacancies "no owner" policy)
 app/
