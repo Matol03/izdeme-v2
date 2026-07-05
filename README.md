@@ -14,7 +14,8 @@ deterministic, explainable **Fit Score (Hard 40 / Experience 30 / Soft 30)** as 
 | **0 Scaffolding** | Next.js/TS app, Zod schemas, Supabase migrations | ✅ done (account-free parts) |
 | **3 Deterministic core** | Verbatim TS port of Fit Score + heuristic parser + **unit tests** | ✅ done |
 | **2 Embeddings + retrieval** | Embedding abstraction (+ offline fallback), cosine top-K retrieval, `retrieval_query` builder, curated corpus + **unit tests** | 🟡 pipeline done; needs Gemini key for true semantic recall + pgvector for the DB path |
-| **4 LLM orchestration** | Provider-agnostic Zod-validated LLM client; Parser + Query-Planner agents that FAIL CLOSED to the heuristic; + **unit tests** | 🟡 abstraction + 2 agents done; Ranker/Tailor agents + AI SDK swap next; needs LLM key to exercise the LLM path |
+| **4 LLM orchestration** | Zod-validated provider-agnostic LLM client + all **4 agents** (Parser, Query-Planner, Ranker, Tailor), each FAILS CLOSED to a deterministic path; + tests | ✅ agents done (offline path verified); AI SDK swap + live LLM path need a key |
+| **5 match_and_rank** | End-to-end pipeline (planner → semantic recall → Fit Score → ranker) running fully offline; + test | 🟡 job body done; Inngest queue + Realtime status need accounts |
 | 1 Persistence + Auth | Supabase Auth, persist profiles | ⏳ needs Supabase project |
 | 5 Background jobs | Inngest functions + Supabase Realtime status | ⏳ needs Inngest |
 | 6 Product surface | saved searches, application tracker, résumé versioning | ⏳ |
@@ -41,7 +42,12 @@ lib/
   agents/
     parser.ts             # Parser Agent — LLM parse, FAILS CLOSED to heuristic
     planner.ts            # Query Planner Agent (+ heuristicPlan fallback)
-    agents.test.ts        # proves fail-closed behavior with no LLM key
+    ranker.ts             # Ranker Agent — metadata scoring, FAILS CLOSED to Fit order
+    tailor.ts             # Tailor Agent — summary, FAILS CLOSED to buildExplain + template
+    agents.test.ts        # fail-closed proofs
+  pipeline/
+    matchAndRank.ts       # end-to-end: planner → recall → Fit Score → ranker (offline-capable)
+    matchAndRank.test.ts  # deterministic end-to-end + ranker/tailor fail-closed
 supabase/migrations/
   0001_init.sql           # full schema + RLS (incl. the vacancies "no owner" policy)
 app/
