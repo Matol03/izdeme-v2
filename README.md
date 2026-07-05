@@ -14,8 +14,8 @@ deterministic, explainable **Fit Score (Hard 40 / Experience 30 / Soft 30)** as 
 | **0 Scaffolding** | Next.js/TS app, Zod schemas, Supabase migrations | ✅ done (account-free parts) |
 | **3 Deterministic core** | Verbatim TS port of Fit Score + heuristic parser + **unit tests** | ✅ done |
 | **2 Embeddings + retrieval** | Embedding abstraction (+ offline fallback), cosine top-K retrieval, `retrieval_query` builder, curated corpus + **unit tests** | 🟡 pipeline done; needs Gemini key for true semantic recall + pgvector for the DB path |
+| **4 LLM orchestration** | Provider-agnostic Zod-validated LLM client; Parser + Query-Planner agents that FAIL CLOSED to the heuristic; + **unit tests** | 🟡 abstraction + 2 agents done; Ranker/Tailor agents + AI SDK swap next; needs LLM key to exercise the LLM path |
 | 1 Persistence + Auth | Supabase Auth, persist profiles | ⏳ needs Supabase project |
-| 4 LLM orchestration | Vercel AI SDK agents (parser/planner/ranker/tailor), `generateObject` | ⏳ needs LLM key |
 | 5 Background jobs | Inngest functions + Supabase Realtime status | ⏳ needs Inngest |
 | 6 Product surface | saved searches, application tracker, résumé versioning | ⏳ |
 | 7 Observability | Sentry + PostHog + Langfuse + Upstash rate limit | ⏳ |
@@ -37,6 +37,11 @@ lib/
   embeddings.test.ts / retrieval.test.ts   # determinism, ordering, semantic recall
   profile/retrievalQuery.ts   # profile → "ideal job description" (asymmetric-text fix, §4)
   ingest/vacancies.ts     # curated corpus + retrieveCandidates() orchestrator
+  llm.ts                  # provider-agnostic LLM client + generateObject (Zod-validated)
+  agents/
+    parser.ts             # Parser Agent — LLM parse, FAILS CLOSED to heuristic
+    planner.ts            # Query Planner Agent (+ heuristicPlan fallback)
+    agents.test.ts        # proves fail-closed behavior with no LLM key
 supabase/migrations/
   0001_init.sql           # full schema + RLS (incl. the vacancies "no owner" policy)
 app/
