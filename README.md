@@ -5,7 +5,23 @@ Production rebuild of [IzdeMe](https://github.com/Matol03/izdeme) per
 Auth/Realtime) + Inngest background jobs + Vercel AI SDK + embeddings**, keeping v1's
 deterministic, explainable **Fit Score (Hard 40 / Experience 30 / Soft 30)** as the core.
 
-> v1 stays live at https://izdeme.vercel.app — this is a separate repo, built phase by phase.
+> **Live: https://izdeme-v2.vercel.app** — functional end-to-end with real semantic search
+> (LLM parse + plan + rank via Groq, Gemini embeddings retrieval, live hh.kz corpus).
+> v1 stays at https://izdeme.vercel.app. Built phase by phase.
+
+## Live pipeline (what runs on a search)
+
+`POST /api/match { resumeText?, prompt }`:
+1. **Parser Agent** (Groq) résumé → structured profile — heuristic fallback.
+2. **Query-Planner Agent** (Groq) prompt → hh filters (city→area, remote, experience…).
+3. **Ingestion**: live hh.kz fetch (OAuth), broad recall (filters relax if too few).
+4. **Embeddings**: Gemini `gemini-embedding-001` (asymmetric task types) — offline fallback.
+5. **Semantic retrieval**: cosine top-K over the candidate corpus.
+6. **Fit Score** (deterministic 40/30/30) + matches/gaps/suggestions.
+7. **Ranker Agent** (Groq) re-orders the shortlist by all metadata + a reason — Fit-order fallback.
+
+`GET /api/status` reports which real backends are live. Every step degrades gracefully
+(no key / failure → deterministic path), so the app always returns results.
 
 ## Status
 
