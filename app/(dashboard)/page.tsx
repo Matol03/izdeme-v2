@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { cap } from "@/lib/scoring/lexicons";
+import { parseResume } from "@/lib/parser/heuristic";
 
 declare global { interface Window { pdfjsLib?: any } }
 
@@ -12,13 +13,12 @@ const RECS = [
   { q: "Frontend developer", label: "Frontend", icon: "M3 4h18v16H3zM3 9h18M8 9v11" },
   { q: "Product manager", label: "Product manager", icon: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM15 9l-4.5 1.5L9 15l4.5-1.5z" },
 ];
+const STAGES = ["Reading your résumé…", "Understanding your request…", "Searching hh.kz…", "Embedding & ranking matches…"];
 
 interface Fit { score: number; breakdown: { hard: number; exp: number; soft: number } }
-interface Result {
-  vacancy: { name: string; company: string; area: string; salary?: any; url?: string; schedule?: string | null; experience?: string | null };
-  fit: Fit; explain: { matches: string[]; gaps: string[]; suggestions: string[] };
-  recall: number; match?: number; reason?: string;
-}
+interface Vac { name: string; company: string; area: string; salary?: any; url?: string; schedule?: string | null; experience?: string | null }
+interface Result { vacancy: Vac; fit: Fit; explain: { matches: string[]; gaps: string[]; suggestions: string[] }; recall: number; match?: number; reason?: string }
+interface Data { results: Result[]; source: string; rankedBy: string; planBy: string; plan: any; profile: any }
 
 function fmtSalary(s: any) {
   if (!s) return <span>Salary undisclosed</span>;
@@ -31,16 +31,27 @@ function fmtSalary(s: any) {
   return <span>Salary undisclosed</span>;
 }
 const ringHex = (p: number) => (p >= 85 ? "#27d39a" : p >= 68 ? "#ffb44d" : "#ff6b6b");
+function markKeywords(text: string, words: string[]) {
+  const uniq = [...new Set(words.map(w => cap(w)).filter(Boolean))].sort((a, b) => b.length - a.length);
+  let out = String(text);
+  for (const w of uniq) out = out.replace(new RegExp("(?![^<]*>)\\b(" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")\\b", "gi"), "<mark>$1</mark>");
+  return out;
+}
 
 export default function DashboardPage() {
   const inputRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const resumeTextRef = useRef<string>("");
+  const stageTimer = useRef<any>(null);
   const [status, setStatus] = useState<any>(null);
-  const [resumeName, setResumeName] = useState("");
+  const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [stage, setStage] = useState(0);
   const [error, setError] = useState("");
-  const [data, setData] = useState<{ results: Result[]; source: string; rankedBy: string; profile: any } | null>(null);
+  const [data, setData] = useState<Data | null>(null);
+  const [tailored, setTailored] = useState<Record<number, any>>({});
+  const [tailoring, setTailoring] = useState<number | null>(null);
+  const [copied, setCopied] = useState<number | null>(null);
 
   useEffect(() => {
     fetch("/api/status").then(r => r.json()).then(setStatus).catch(() => {});
@@ -50,6 +61,7 @@ export default function DashboardPage() {
       s.onload = () => { if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"; };
       document.body.appendChild(s);
     }
+    return () => clearInterval(stageTimer.current);
   }, []);
 
   async function extractPdf(file: File): Promise<string> {
@@ -75,27 +87,51 @@ export default function DashboardPage() {
   async function onFile(file?: File) {
     if (!file) return;
     if (!window.pdfjsLib) { setError("PDF engine still loading — try again in a moment."); return; }
-    try { resumeTextRef.current = await extractPdf(file); setResumeName(file.name); setError(""); }
-    catch { setError("Couldn't read that PDF — try another file."); }
+    try {
+      const text = await extractPdf(file);
+      resumeTextRef.current = text;
+      setProfile({ ...parseResume(text), _instant: true }); // instant local parse; LLM refines on match
+      setError("");
+    } catch { setError("Couldn't read that PDF — try another file."); }
   }
+
+  function startStages() { setStage(0); clearInterval(stageTimer.current); stageTimer.current = setInterval(() => setStage(s => Math.min(s + 1, STAGES.length - 1)), 1400); }
 
   async function run() {
     const prompt = inputRef.current?.value.trim() || "";
     if (!prompt && !resumeTextRef.current) { inputRef.current?.focus(); return; }
-    setLoading(true); setError(""); setData(null);
+    setLoading(true); setError(""); setData(null); setTailored({}); startStages();
     try {
       const r = await fetch("/api/match", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, resumeText: resumeTextRef.current }) });
       const j = await r.json();
       if (j.error) throw new Error(j.error);
       setData(j);
+      if (j.profile) setProfile(j.profile); // carry the match's profile (rich if résumé, else empty)
     } catch (e: any) { setError(e?.message || "Search failed"); }
-    finally { setLoading(false); }
+    finally { setLoading(false); clearInterval(stageTimer.current); }
+  }
+
+  async function tailor(i: number, r: Result) {
+    if (tailored[i]) { setTailored(t => { const n = { ...t }; delete n[i]; return n; }); return; }
+    setTailoring(i);
+    try {
+      const res = await fetch("/api/tailor", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ profile, vacancy: r.vacancy }) });
+      const t = await res.json();
+      setTailored(prev => ({ ...prev, [i]: t }));
+    } catch { setTailored(prev => ({ ...prev, [i]: { summary: "Could not generate a tailored summary right now." } })); }
+    finally { setTailoring(null); }
   }
 
   const useChip = (q: string) => { if (inputRef.current) inputRef.current.value = q; run(); };
   const bar = (lbl: string, w: string, pc: number, col: string) => (
     <div className="bd-row" key={lbl}><span className="bk">{lbl} <small style={{ color: "var(--muted-2)" }}>{w}</small></span><div className="bar"><i style={{ width: pc + "%", background: col }} /></div><span className="pc">{pc}</span></div>
   );
+
+  const planChips = data?.plan ? [
+    data.plan.city && { t: data.plan.city, d: "M12 21s7-5.7 7-11a7 7 0 1 0-14 0c0 5.3 7 11 7 11z M12 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z" },
+    data.plan.remote && { t: "Remote", d: "M3 5h18v12H3zM2 20h20" },
+    data.plan.experience && { t: String(data.plan.experience).replace("between", "").replace("And", "–").replace("moreThan6", "6+ yrs").replace("noExperience", "no exp"), d: "M12 8v5l3 2 M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z" },
+  ].filter(Boolean) as { t: string; d: string }[] : [];
 
   return (
     <>
@@ -120,69 +156,109 @@ export default function DashboardPage() {
               </button>
             </div>
             <div className="chips">
-              {RECS.map(r => (
-                <button key={r.q} className="chip" type="button" onClick={() => useChip(r.q)}>
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><path d={r.icon} /></svg>{r.label}
-                </button>
-              ))}
+              {RECS.map(r => (<button key={r.q} className="chip" type="button" onClick={() => useChip(r.q)}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><path d={r.icon} /></svg>{r.label}</button>))}
             </div>
           </div>
 
           <div className="resume-shell">
             <div className="dropzone" onClick={() => fileRef.current?.click()}>
               <div className="dz-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 16V4m0 0L8 8m4-4 4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg></div>
-              <div className="dz-txt"><b>{resumeName ? `✓ ${resumeName}` : "Drop your resume here, or click to upload"}</b></div>
+              <div className="dz-txt"><b>{profile?.name ? `✓ ${profile.name}` : resumeTextRef.current ? "✓ Résumé loaded" : "Drop your resume here, or click to upload"}</b></div>
               <input type="file" ref={fileRef} accept="application/pdf,.pdf" hidden onChange={e => onFile(e.target.files?.[0])} />
             </div>
+
+            {profile && (profile.skills?.length || profile.soft?.length) ? (
+              <div className="profile">
+                <div className="ph">
+                  <div className="ok"><svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="m20 6-11 11-5-5" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" /></svg></div>
+                  <div><h4>Résumé parsed{profile.name ? ` — ${profile.name}` : ""}</h4><div className="sub">{profile.skills.length} skills · {profile.soft.length} soft · {profile.years || "–"} yrs{profile.seniority ? ` · ${cap(profile.seniority)}` : ""}{profile._instant ? " · reading…" : ""}</div></div>
+                </div>
+                <div className="pchips">
+                  {profile.skills.slice(0, 12).map((s: string, k: number) => <span className="pchip" key={k}>{cap(s)}</span>)}
+                  {profile.soft.slice(0, 4).map((s: string, k: number) => <span className="pchip soft" key={"s" + k}>{cap(s)}</span>)}
+                </div>
+              </div>
+            ) : null}
           </div>
 
           {error && <p className="err">{error}</p>}
         </section>
 
-        {data && (
+        {(loading || data) && (
           <section id="results">
             <div className="res-head">
-              <h2>Top {data.results.length} matches</h2>
-              <div className="res-meta">
-                <div className={"meta-pill" + (data.source === "hh.kz" ? " on" : "")}>Source: <b>{data.source === "hh.kz" ? "● hh.kz live" : "● curated"}</b></div>
-                <div className={"meta-pill" + (data.rankedBy === "llm" ? " on" : "")}>Ranking: <b>{data.rankedBy === "llm" ? "LLM" : "Fit Score"}</b></div>
-                <div className={"meta-pill" + (status?.embeddings ? " on" : "")}>Retrieval: <b>{status?.embeddings ? "semantic" : "lexical"}</b></div>
+              <h2>{loading ? "Finding your matches…" : `Top ${data!.results.length} matches`}</h2>
+              {!loading && data && (
+                <div className="res-meta">
+                  <div className={"meta-pill" + (data.source === "hh.kz" ? " on" : "")}>Source: <b>{data.source === "hh.kz" ? "● hh.kz live" : "● curated"}</b></div>
+                  <div className={"meta-pill" + (data.rankedBy === "llm" ? " on" : "")}>Ranking: <b>{data.rankedBy === "llm" ? "LLM" : "Fit Score"}</b></div>
+                  <div className={"meta-pill" + (status?.embeddings ? " on" : "")}>Retrieval: <b>{status?.embeddings ? "semantic" : "lexical"}</b></div>
+                </div>
+              )}
+            </div>
+
+            {!loading && planChips.length > 0 && (
+              <div className="plan-chips" style={{ marginBottom: 18 }}>
+                <span style={{ fontSize: 12, color: "var(--muted-2)", alignSelf: "center" }}>Understood:</span>
+                {planChips.map((c, k) => <span className="plan-chip" key={k}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><path d={c.d} /></svg>{c.t}</span>)}
               </div>
-            </div>
-            <div className="grid">
-              {data.results.map((r, i) => {
-                const initials = r.vacancy.company.replace(/[^A-Za-zА-Яа-я ]/g, "").trim().split(/\s+/).slice(0, 2).map(w => w[0] || "").join("").toUpperCase() || "·";
-                const vmeta = [r.vacancy.experience, r.vacancy.schedule, r.vacancy.area].filter(Boolean);
-                return (
-                  <div className={"card" + (i < 3 ? " top" : "")} key={i}>
-                    <span className="rank">#{i + 1}</span>
-                    <div className="card-top">
-                      <div style={{ flex: 1 }}>
-                        <h3>{r.vacancy.name}</h3>
-                        <div className="company"><span className="logo">{initials}</span>{r.vacancy.company} · {r.vacancy.area}</div>
+            )}
+
+            {loading ? (
+              <>
+                <div className="stage"><span className="spinner" /> {STAGES[stage]}</div>
+                <div className="grid">{Array.from({ length: 6 }).map((_, i) => <div className="skel" key={i} />)}</div>
+              </>
+            ) : (
+              <div className="grid">
+                {data!.results.map((r, i) => {
+                  const initials = r.vacancy.company.replace(/[^A-Za-zА-Яа-я ]/g, "").trim().split(/\s+/).slice(0, 2).map(w => w[0] || "").join("").toUpperCase() || "·";
+                  const vmeta = [r.vacancy.experience, r.vacancy.schedule, r.vacancy.area].filter(Boolean);
+                  const t = tailored[i];
+                  return (
+                    <div className={"card" + (i < 3 ? " top" : "")} key={i}>
+                      <span className="rank">#{i + 1}</span>
+                      <div className="card-top">
+                        <div style={{ flex: 1 }}>
+                          <h3>{r.vacancy.name}</h3>
+                          <div className="company"><span className="logo">{initials}</span>{r.vacancy.company} · {r.vacancy.area}</div>
+                        </div>
+                        <div className="fit-ring" style={{ background: `conic-gradient(${ringHex(r.fit.score)} ${r.fit.score}%, rgba(255,255,255,.07) 0)` }}>
+                          <span className="num" style={{ color: ringHex(r.fit.score) }}>{r.fit.score}%</span><span className="lbl">FIT</span>
+                        </div>
                       </div>
-                      <div className="fit-ring" style={{ background: `conic-gradient(${ringHex(r.fit.score)} ${r.fit.score}%, rgba(255,255,255,.07) 0)` }}>
-                        <span className="num" style={{ color: ringHex(r.fit.score) }}>{r.fit.score}%</span><span className="lbl">FIT</span>
+                      <div className="salary">{fmtSalary(r.vacancy.salary)}</div>
+                      {vmeta.length > 0 && <div className="vac-meta">{vmeta.map((m, k) => <span className="vmeta" key={k}>{m}</span>)}</div>}
+                      {r.reason && <div className="match-why"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7z" /></svg><span>{r.reason}{typeof r.match === "number" ? <> · <b>{r.match}% match</b></> : null}</span></div>}
+                      <div className="breakdown">
+                        {bar("Hard", "40%", r.fit.breakdown.hard, "var(--brand)")}
+                        {bar("Experience", "30%", r.fit.breakdown.exp, "var(--brand-2)")}
+                        {bar("Soft", "30%", r.fit.breakdown.soft, "var(--green)")}
                       </div>
+                      <div className="explain">
+                        <div className="ex-block match"><div className="ex-h">✓ Matches</div><div className="ex-tags">{r.explain.matches.length ? r.explain.matches.map((s, k) => <span className="ex-tag m" key={k}>{cap(s)}</span>) : <span className="ex-tag">transferable skills</span>}</div></div>
+                        <div className="ex-block gap"><div className="ex-h">! Gaps</div><div className="ex-tags">{r.explain.gaps.length ? r.explain.gaps.map((s, k) => <span className="ex-tag g" key={k}>{cap(s)}</span>) : <span className="ex-tag m">no critical gaps</span>}</div></div>
+                        <div className="ex-block sug"><div className="ex-h">✦ Suggestions</div><ul className="sug-list">{r.explain.suggestions.map((s, k) => <li key={k} dangerouslySetInnerHTML={{ __html: s }} />)}</ul></div>
+                      </div>
+
+                      <button className="btn-tailor" onClick={() => tailor(i, r)} disabled={tailoring === i}>
+                        {tailoring === i ? <span className="spinner" /> : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4" /></svg>}
+                        {t ? "Hide tailored résumé" : tailoring === i ? "Tailoring…" : "Tailor résumé"}
+                      </button>
+                      {t && (
+                        <div className="patch">
+                          <div className="txt" dangerouslySetInnerHTML={{ __html: markKeywords(t.summary || "", [...(profile?.skills || []), ...(t.matches || [])]) }} />
+                          <div className="foot">
+                            <button className={"btn-copy" + (copied === i ? " done" : "")} onClick={() => { navigator.clipboard.writeText(t.summary || "").then(() => { setCopied(i); setTimeout(() => setCopied(null), 1800); }); }}>{copied === i ? "Copied ✓" : "Copy"}</button>
+                          </div>
+                        </div>
+                      )}
+                      {r.vacancy.url && <a className="open" href={r.vacancy.url} target="_blank" rel="noopener">Open on hh.kz ↗</a>}
                     </div>
-                    <div className="salary">{fmtSalary(r.vacancy.salary)}</div>
-                    {vmeta.length > 0 && <div className="vac-meta">{vmeta.map((m, k) => <span className="vmeta" key={k}>{m}</span>)}</div>}
-                    {r.reason && <div className="match-why"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7z" /></svg><span>{r.reason}{typeof r.match === "number" ? <> · <b>{r.match}% match</b></> : null}</span></div>}
-                    <div className="breakdown">
-                      {bar("Hard", "40%", r.fit.breakdown.hard, "var(--brand)")}
-                      {bar("Experience", "30%", r.fit.breakdown.exp, "var(--brand-2)")}
-                      {bar("Soft", "30%", r.fit.breakdown.soft, "var(--green)")}
-                    </div>
-                    <div className="explain">
-                      <div className="ex-block match"><div className="ex-h">✓ Matches</div><div className="ex-tags">{r.explain.matches.length ? r.explain.matches.map((s, k) => <span className="ex-tag m" key={k}>{cap(s)}</span>) : <span className="ex-tag">transferable skills</span>}</div></div>
-                      <div className="ex-block gap"><div className="ex-h">! Gaps</div><div className="ex-tags">{r.explain.gaps.length ? r.explain.gaps.map((s, k) => <span className="ex-tag g" key={k}>{cap(s)}</span>) : <span className="ex-tag m">no critical gaps</span>}</div></div>
-                      <div className="ex-block sug"><div className="ex-h">✦ Suggestions</div><ul className="sug-list">{r.explain.suggestions.map((s, k) => <li key={k} dangerouslySetInnerHTML={{ __html: s }} />)}</ul></div>
-                    </div>
-                    {r.vacancy.url && <a className="open" href={r.vacancy.url} target="_blank" rel="noopener">Open on hh.kz ↗</a>}
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </section>
         )}
       </main>
