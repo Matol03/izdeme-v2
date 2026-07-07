@@ -12,9 +12,9 @@ export async function POST(req: Request) {
     const { resumeText = "", prompt = "" } = await req.json();
 
     // Parse résumé (LLM agent → heuristic fallback) if provided.
-    const profile = String(resumeText).trim()
-      ? (await parseResumeAgent(String(resumeText))).profile
-      : parseResume("");
+    let profile, parseBy = "none";
+    if (String(resumeText).trim()) { const pr = await parseResumeAgent(String(resumeText)); profile = pr.profile; parseBy = pr.source; }
+    else profile = parseResume("");
 
     // Search query: the user's prompt, else derived from the parsed profile.
     const query =
@@ -25,7 +25,7 @@ export async function POST(req: Request) {
       "developer";
 
     const out = await matchAndRank(profile, query, { top: 10 });
-    return Response.json({ profile, query, ...out });
+    return Response.json({ profile, query, parseBy, ...out });
   } catch (e: any) {
     return Response.json({ error: e?.message || "match failed" }, { status: 500 });
   }

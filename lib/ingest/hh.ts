@@ -89,18 +89,38 @@ export async function fetchHhVacancies(query: string, opts: FetchOpts = {}): Pro
     }
     if (!r.ok) return [];
     const data = await r.json();
-    return (data.items || []).map((v: any): Vacancy => ({
-      id: v.id,
-      name: v.name,
-      company: v.employer?.name || "Company",
-      area: v.area?.name || "—",
-      salary: v.salary ? [v.salary.from, v.salary.to, v.salary.currency] : null,
-      requirements: clean(v.snippet?.requirement),
-      responsibilities: clean(v.snippet?.responsibility),
-      description: clean(`${v.snippet?.requirement || ""} ${v.snippet?.responsibility || ""}`).trim(),
-      url: v.alternate_url,
-      schedule: v.schedule?.name || null,
-      experience: v.experience?.name || null,
-    }));
+    return (data.items || []).map((v: any): Vacancy => normalizeItem(v));
   } catch { return []; }
+}
+
+function normalizeItem(v: any): Vacancy {
+  return {
+    id: v.id,
+    name: v.name,
+    company: v.employer?.name || "Company",
+    area: v.area?.name || "—",
+    salary: v.salary ? [v.salary.from, v.salary.to, v.salary.currency] : null,
+    requirements: clean(v.snippet?.requirement),
+    responsibilities: clean(v.snippet?.responsibility),
+    description: clean(`${v.snippet?.requirement || ""} ${v.snippet?.responsibility || ""}`).trim(),
+    url: v.alternate_url,
+    schedule: v.schedule?.name || null,
+    experience: v.experience?.name || null,
+  };
+}
+
+/**
+ * Broad candidate fetch for retrieval: full filters → relax to text+city → whole KZ,
+ * de-duplicated. Recall stays high (semantic retrieval + Fit + LLM rank narrow it).
+ */
+export async function fetchCandidates(plan: SearchPlan): Promise<Vacancy[]> {
+  const q = plan.text || "";
+  const area = cityToArea(plan.city);
+  const out: Vacancy[] = [];
+  const seen = new Set<string>();
+  const add = (vs: Vacancy[]) => { for (const v of vs) { const id = v.id || v.name + v.company; if (!seen.has(id)) { seen.add(id); out.push(v); } } };
+  add(await fetchHhVacancies(q, planToHhOpts(plan)));            // full filters
+  if (out.length < 12) add(await fetchHhVacancies(q, { area })); // relax to text + city
+  if (out.length < 12) add(await fetchHhVacancies(q, {}));       // relax to whole KZ
+  return out;
 }

@@ -14,7 +14,7 @@ import type { Profile, Vacancy } from "../schemas";
 import { planSearchAgent } from "../agents/planner";
 import { rankVacanciesAgent } from "../agents/ranker";
 import { embedVacancies, retrieveCandidates, FALLBACK_POOL } from "../ingest/vacancies";
-import { fetchHhVacancies, planToHhOpts } from "../ingest/hh";
+import { fetchCandidates } from "../ingest/hh";
 import { scoreVacancy, buildExplain, type FitResult } from "../scoring/fitScore";
 import type { SearchPlan } from "../schemas";
 
@@ -28,6 +28,7 @@ export interface MatchResult {
 }
 export interface MatchAndRankOut {
   plan: SearchPlan;
+  planBy: "llm" | "heuristic";
   rankedBy: "llm" | "heuristic";
   source: "hh.kz" | "curated";
   results: MatchResult[];
@@ -38,16 +39,16 @@ export async function matchAndRank(
   prompt: string,
   opts: { k?: number; top?: number; corpus?: Vacancy[] } = {},
 ): Promise<MatchAndRankOut> {
-  const { plan } = await planSearchAgent(prompt);
+  const { plan, source: planBy } = await planSearchAgent(prompt);
 
-  // Corpus: live hh.kz (filtered by the plan) → curated fallback. Tests pass opts.corpus.
+  // Corpus: broad live hh.kz candidate fetch (filters relax if too few) → curated fallback.
   let vacancies = opts.corpus;
-  let source: "hh.kz" | "curated" = "hh.kz";
+  let source: "hh.kz" | "curated" = "curated";
   if (!vacancies) {
-    const hh = await fetchHhVacancies(plan.text || prompt, planToHhOpts(plan));
-    if (hh.length) vacancies = hh;
-    else { vacancies = FALLBACK_POOL; source = "curated"; }
-  } else source = "curated";
+    const hh = await fetchCandidates(plan);
+    if (hh.length) { vacancies = hh; source = "hh.kz"; }
+    else vacancies = FALLBACK_POOL;
+  }
   const corpus = await embedVacancies(vacancies);
 
   // 1) semantic recall → top-K
@@ -71,5 +72,5 @@ export async function matchAndRank(
   }
   shortlist.forEach((s, i) => { if (!used.has(i)) ordered.push(s); }); // append any the ranker omitted
 
-  return { plan, rankedBy, source, results: ordered.slice(0, opts.top ?? 10) };
+  return { plan, planBy, rankedBy, source, results: ordered.slice(0, opts.top ?? 10) };
 }
