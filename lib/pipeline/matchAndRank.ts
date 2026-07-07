@@ -14,6 +14,7 @@ import type { Profile, Vacancy } from "../schemas";
 import { planSearchAgent } from "../agents/planner";
 import { rankVacanciesAgent } from "../agents/ranker";
 import { embedVacancies, retrieveCandidates, FALLBACK_POOL } from "../ingest/vacancies";
+import { fetchHhVacancies, planToHhOpts } from "../ingest/hh";
 import { scoreVacancy, buildExplain, type FitResult } from "../scoring/fitScore";
 import type { SearchPlan } from "../schemas";
 
@@ -28,6 +29,7 @@ export interface MatchResult {
 export interface MatchAndRankOut {
   plan: SearchPlan;
   rankedBy: "llm" | "heuristic";
+  source: "hh.kz" | "curated";
   results: MatchResult[];
 }
 
@@ -38,8 +40,14 @@ export async function matchAndRank(
 ): Promise<MatchAndRankOut> {
   const { plan } = await planSearchAgent(prompt);
 
-  // Corpus: curated pool for now; Phase 2 swaps in live-fetched + embedded hh vacancies.
-  const vacancies = opts.corpus ?? FALLBACK_POOL;
+  // Corpus: live hh.kz (filtered by the plan) → curated fallback. Tests pass opts.corpus.
+  let vacancies = opts.corpus;
+  let source: "hh.kz" | "curated" = "hh.kz";
+  if (!vacancies) {
+    const hh = await fetchHhVacancies(plan.text || prompt, planToHhOpts(plan));
+    if (hh.length) vacancies = hh;
+    else { vacancies = FALLBACK_POOL; source = "curated"; }
+  } else source = "curated";
   const corpus = await embedVacancies(vacancies);
 
   // 1) semantic recall → top-K
@@ -53,7 +61,7 @@ export async function matchAndRank(
 
   // 3) shortlist by deterministic Fit, then LLM re-rank (fails closed → keeps Fit order)
   const shortlist = scored.sort((a, b) => b.fit.score - a.fit.score).slice(0, 15);
-  const { ranked, source } = await rankVacanciesAgent(prompt, shortlist.map(s => s.vacancy));
+  const { ranked, source: rankedBy } = await rankVacanciesAgent(prompt, shortlist.map(s => s.vacancy));
 
   const ordered: MatchResult[] = [];
   const used = new Set<number>();
@@ -63,5 +71,5 @@ export async function matchAndRank(
   }
   shortlist.forEach((s, i) => { if (!used.has(i)) ordered.push(s); }); // append any the ranker omitted
 
-  return { plan, rankedBy: source, results: ordered.slice(0, opts.top ?? 10) };
+  return { plan, rankedBy, source, results: ordered.slice(0, opts.top ?? 10) };
 }

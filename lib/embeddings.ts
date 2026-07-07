@@ -72,6 +72,39 @@ export async function embed(text: string, taskType: TaskType = "RETRIEVAL_DOCUME
   return hashEmbed(text, EMBED_DIMS);
 }
 
+/** Batch embed (one Gemini call for the whole corpus). Falls back to offline hashing. */
+async function geminiEmbedBatch(texts: string[], taskType: TaskType, dims: number, key: string): Promise<number[][]> {
+  const model = process.env.GEMINI_EMBED_MODEL || "gemini-embedding-001";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:batchEmbedContents?key=${key}`;
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      requests: texts.map(t => ({
+        model: `models/${model}`,
+        content: { parts: [{ text: t.slice(0, 8000) }] },
+        taskType,
+        outputDimensionality: dims,
+      })),
+    }),
+  });
+  if (!r.ok) throw new Error(`gemini-batch ${r.status}: ${(await r.text()).slice(0, 160)}`);
+  const j = await r.json();
+  const embs: number[][] = (j?.embeddings || []).map((e: any) => e?.values || []);
+  if (embs.length !== texts.length || embs.some(v => !v.length)) throw new Error("gemini-batch: shape mismatch");
+  return embs;
+}
+
+/** Embed many texts. One Gemini batch call when keyed; else the offline fallback per text. */
+export async function embedBatch(texts: string[], taskType: TaskType = "RETRIEVAL_DOCUMENT"): Promise<number[][]> {
+  const key = process.env.GEMINI_API_KEY;
+  if (key && texts.length) {
+    try { return await geminiEmbedBatch(texts, taskType, EMBED_DIMS, key); }
+    catch { /* fall through */ }
+  }
+  return texts.map(t => hashEmbed(t, EMBED_DIMS));
+}
+
 /** Cosine similarity (handles non-normalized vectors). */
 export function cosine(a: number[], b: number[]): number {
   let dot = 0, na = 0, nb = 0;

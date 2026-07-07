@@ -6,7 +6,7 @@
  *   retrieval_query (RETRIEVAL_QUERY) and each vacancy (RETRIEVAL_DOCUMENT), then top-K.
  */
 import type { Profile, Vacancy } from "../schemas";
-import { embed } from "../embeddings";
+import { embed, embedBatch } from "../embeddings";
 import { retrieveTopK, type Embedded, type Retrieved } from "../retrieval";
 import { buildRetrievalQuery } from "../profile/retrievalQuery";
 
@@ -15,9 +15,10 @@ export function vacancyText(v: Vacancy): string {
   return `${v.name}. ${v.requirements || ""} ${v.responsibilities || ""}`.trim();
 }
 
-/** Embed a corpus of vacancies as RETRIEVAL_DOCUMENT. */
+/** Embed a corpus of vacancies as RETRIEVAL_DOCUMENT (one batched embedding call). */
 export async function embedVacancies(vacancies: Vacancy[]): Promise<Embedded<Vacancy>[]> {
-  return Promise.all(vacancies.map(async v => ({ item: v, embedding: await embed(vacancyText(v), "RETRIEVAL_DOCUMENT") })));
+  const vecs = await embedBatch(vacancies.map(vacancyText), "RETRIEVAL_DOCUMENT");
+  return vacancies.map((v, i) => ({ item: v, embedding: vecs[i] }));
 }
 
 /**
